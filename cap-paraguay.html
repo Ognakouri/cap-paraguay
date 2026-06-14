@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Cap Paraguay — Le Runner Fiscal</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { height: 100%; overflow: hidden; background: #0B1220; font-family: 'Trebuchet MS', 'Segoe UI', sans-serif; }
+  #wrap { position: relative; width: 100vw; height: 100vh; display: flex; align-items: center; justify-content: center; background: #0B1220; }
+  canvas { display: block; touch-action: none; }
+  .overlay { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; color: #fff; padding: 24px; pointer-events: none; }
+  .overlay.active { pointer-events: auto; }
+  .panel { background: rgba(11,18,32,0.92); border: 2px solid #2563EB; border-radius: 18px; padding: 28px 26px; max-width: 360px; width: 100%; }
+  h1 { font-size: 30px; font-weight: 800; margin-bottom: 6px; letter-spacing: -0.5px; }
+  h1 .accent { color: #34D399; }
+  .sub { font-size: 14px; color: #9FB3D1; line-height: 1.5; margin-bottom: 18px; }
+  .btn { background: #2563EB; color: #fff; border: none; border-radius: 12px; padding: 14px 28px; font-size: 17px; font-weight: 700; cursor: pointer; font-family: inherit; transition: transform .08s, background .15s; width: 100%; }
+  .btn:active { transform: scale(0.97); }
+  .btn.wa { background: #25D366; color: #04342C; margin-top: 10px; }
+  .stat { font-size: 15px; color: #cfe; margin: 4px 0; }
+  .big { font-size: 40px; font-weight: 800; color: #34D399; margin: 8px 0; }
+  .hint { font-size: 12px; color: #6B7FA0; margin-top: 14px; }
+  #hud { position: absolute; top: 12px; left: 12px; right: 12px; display: flex; justify-content: space-between; align-items: flex-start; pointer-events: none; color: #fff; font-weight: 800; text-shadow: 0 1px 3px rgba(0,0,0,0.5); }
+  #hud .right { text-align: right; }
+  .hudlbl { font-size: 11px; opacity: .85; font-weight: 700; }
+  .hudval { font-size: 20px; }
+  #progwrap { position: absolute; top: 56px; left: 12px; right: 12px; height: 10px; background: rgba(255,255,255,0.4); border-radius: 6px; overflow: hidden; pointer-events: none; border: 1px solid rgba(255,255,255,0.5); }
+  #progbar { height: 100%; width: 0%; background: #2563EB; transition: width .2s; }
+  #flag { position: absolute; top: 50px; font-size: 18px; pointer-events: none; transition: left .2s; }
+  .hide { display: none !important; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="c"></canvas>
+
+  <div id="hud" class="hide">
+    <div><div class="hudlbl">ÉCONOMIES</div><div class="hudval" id="score">0 €</div></div>
+    <div class="right"><div class="hudlbl">DISTANCE</div><div class="hudval" id="dist">0 m</div></div>
+  </div>
+  <div id="progwrap" class="hide"><div id="progbar"></div></div>
+  <div id="flag" class="hide">🇵🇾</div>
+
+  <div class="overlay active" id="start">
+    <div class="panel">
+      <h1>Cap <span class="accent">Paraguay</span></h1>
+      <p class="sub">Quittez Paris et le fisc. Sautez par-dessus les contrôles, encaissez vos avantages fiscaux et filez du pied de la Tour Eiffel jusqu'au Palacio de los López.</p>
+      <button class="btn" id="playBtn">Jouer</button>
+      <p class="hint">ESPACE / clic / tap pour sauter · double saut possible</p>
+    </div>
+  </div>
+
+  <div class="overlay hide" id="over">
+    <div class="panel">
+      <h1 id="overTitle">Contrôle fiscal !</h1>
+      <p class="sub" id="overSub">Le fisc vous a rattrapé.</p>
+      <div class="stat">Économies réalisées</div>
+      <div class="big" id="finalScore">0 €</div>
+      <div class="stat" id="finalDist">0 m parcourus</div>
+      <button class="btn" id="retryBtn">Rejouer</button>
+      <button class="btn wa" id="waBtn">💬 Devenir résident pour de vrai</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const cv = document.getElementById('c');
+  const ctx = cv.getContext('2d');
+
+  let W, H, GROUND;
+  function resize(){
+    const maxW = 480;
+    W = Math.min(window.innerWidth, maxW);
+    H = window.innerHeight;
+    cv.width = W; cv.height = H;
+    GROUND = H - Math.min(150, H*0.20);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  const WHATSAPP = 'https://wa.me/595971362302?text=' +
+    encodeURIComponent("Bonjour, j'ai joué à Cap Paraguay et je veux devenir résident fiscal pour de vrai !");
+  const GOAL = 1200;
+
+  let state = 'start';
+  let score = 0, dist = 0, speed = 0, baseSpeed = 3.4;
+  let obstacles = [], coins = [], clouds = [], particles = [], birds = [], drops = [], trail = [];
+  let spawnT = 0, coinT = 0, lastTime = 0, won = false;
+
+  const player = { x: 70, y: 0, w: 34, h: 46, vy: 0, onGround: true, jumps: 0, runFrame: 0 };
+  const GRAV = 0.62, JUMP = -13.5, DBL = -11.5;
+
+  function reset(){
+    score = 0; dist = 0; speed = baseSpeed; won = false;
+    obstacles = []; coins = []; particles = []; birds = []; drops = []; trail = [];
+    clouds = [];
+    for(let i=0;i<5;i++) clouds.push({x: Math.random()*W, y: 30+Math.random()*100, s: 0.15+Math.random()*0.3, r: 22+Math.random()*18});
+    player.y = GROUND - player.h; player.vy = 0; player.onGround = true; player.jumps = 0;
+    spawnT = 80; coinT = 35;
+  }
+
+  function jump(){
+    if(state !== 'play') return;
+    if(player.onGround){ player.vy = JUMP; player.onGround = false; player.jumps = 1; }
+    else if(player.jumps < 2){ player.vy = DBL; player.jumps = 2;
+      for(let i=0;i<8;i++) particles.push({x:player.x+player.w/2, y:player.y+player.h, vx:(Math.random()-0.5)*4, vy:Math.random()*3, life:20, c:'#fff'});
+    }
+  }
+
+  function onTap(e){ e.preventDefault(); if(state==='play') jump(); }
+  window.addEventListener('keydown', e=>{ if(e.code==='Space'||e.code==='ArrowUp'){ e.preventDefault(); jump(); }});
+  cv.addEventListener('mousedown', onTap);
+  cv.addEventListener('touchstart', onTap, {passive:false});
+
+  const OBST_TYPES = [
+    {label:'FISC', col:'#E24B4A', w:34, h:38},
+    {label:'URSSAF', col:'#A32D2D', w:50, h:32},
+    {label:'TVA', col:'#D85A30', w:30, h:46},
+  ];
+  function spawnObstacle(){
+    const t = OBST_TYPES[Math.floor(Math.random()*OBST_TYPES.length)];
+    obstacles.push({x: W+20, y: GROUND - t.h, w:t.w, h:t.h, col:t.col, label:t.label});
+  }
+  const COIN_TYPES = [
+    {v:50, label:'0%', col:'#34D399'},
+    {v:100, label:'€', col:'#FBBF24'},
+    {v:200, label:'★', col:'#2563EB'},
+  ];
+  function spawnCoin(){
+    const c = COIN_TYPES[Math.floor(Math.random()*COIN_TYPES.length)];
+    const high = Math.random() < 0.35;
+    coins.push({x: W+20, y: high ? GROUND-95-Math.random()*30 : GROUND-38-Math.random()*22, r:14, v:c.v, label:c.label, col:c.col, got:false, ph:Math.random()*6});
+  }
+
+  function hitObstacle(o){
+    const pad = 7;
+    const px = player.x+pad, py = player.y+pad, pw = player.w-pad*2, ph = player.h-pad;
+    return px < o.x+o.w && px+pw > o.x && py < o.y+o.h && py+ph > o.y;
+  }
+  function hitCoin(cn){
+    return player.x < cn.x+cn.r && player.x+player.w > cn.x-cn.r &&
+           player.y < cn.y+cn.r && player.y+player.h > cn.y-cn.r;
+  }
+
+  function update(dt){
+    speed = baseSpeed + dist/1400;
+    dist += speed * dt * 0.32;
+    const t = Math.min(1, dist/GOAL);
+
+    if(dist >= GOAL && !won){ won = true; endGame(true); return; }
+
+    player.vy += GRAV * dt;
+    player.y += player.vy * dt;
+    if(player.y >= GROUND - player.h){ player.y = GROUND - player.h; player.vy = 0; player.onGround = true; player.jumps = 0; }
+    player.runFrame += speed * dt * 0.3;
+
+    trail.push({x:player.x+player.w/2, y:player.y+player.h/2, life:10});
+    if(trail.length>10) trail.shift();
+    for(let tr of trail) tr.life -= dt;
+
+    spawnT -= speed * dt * 0.25;
+    if(spawnT <= 0){ spawnObstacle(); spawnT = 85 + Math.random()*70; }
+    coinT -= speed * dt * 0.25;
+    if(coinT <= 0){ spawnCoin(); coinT = 38 + Math.random()*42; }
+
+    for(let o of obstacles){ o.x -= speed * dt; }
+    obstacles = obstacles.filter(o=>o.x+o.w > -20);
+    for(let o of obstacles){ if(hitObstacle(o)){ endGame(false); return; } }
+
+    for(let cn of coins){
+      cn.x -= speed * dt; cn.ph += 0.15*dt;
+      if(!cn.got && hitCoin(cn)){
+        cn.got = true; score += cn.v;
+        for(let i=0;i<10;i++) particles.push({x:cn.x,y:cn.y,vx:(Math.random()-0.5)*5,vy:(Math.random()-0.5)*5,life:24,c:cn.col});
+      }
+    }
+    coins = coins.filter(c=>!c.got && c.x+c.r>-20);
+
+    for(let cl of clouds){ cl.x -= cl.s*dt; if(cl.x < -70){ cl.x = W+50; cl.y=30+Math.random()*100; } }
+
+    if(t < 0.45){ if(Math.random() < 0.5) drops.push({x:Math.random()*W, y:-10, v:7+Math.random()*4}); }
+    for(let d of drops){ d.y += d.v*dt; d.x -= 1.5*dt; }
+    drops = drops.filter(d=>d.y < GROUND);
+
+    if(t > 0.5 && Math.random() < 0.012){ birds.push({x:W+20, y:50+Math.random()*110, ph:Math.random()*6}); }
+    for(let b of birds){ b.x -= (speed*0.6)*dt; b.ph += 0.2*dt; }
+    birds = birds.filter(b=>b.x>-30);
+
+    for(let p of particles){ p.x+=p.vx*dt; p.y+=p.vy*dt; p.vy+=0.2*dt; p.life-=dt; }
+    particles = particles.filter(p=>p.life>0);
+
+    document.getElementById('score').textContent = score.toLocaleString('fr-FR')+' €';
+    document.getElementById('dist').textContent = Math.floor(dist)+' m';
+    const pct = Math.min(100, dist/GOAL*100);
+    document.getElementById('progbar').style.width = pct+'%';
+    document.getElementById('flag').style.left = 'calc(12px + '+pct+'% * 0.92)';
+  }
+
+  function roundRect(x,y,w,h,r){ ctx.beginPath(); ctx.moveTo(x+r,y); ctx.arcTo(x+w,y,x+w,y+h,r); ctx.arcTo(x+w,y+h,x,y+h,r); ctx.arcTo(x,y+h,x,y,r); ctx.arcTo(x,y,x+w,y,r); ctx.closePath(); }
+  function lerp(a,b,t){ return a+(b-a)*t; }
+  function lerpCol(a,b,t){ return 'rgb('+Math.round(lerp(a[0],b[0],t))+','+Math.round(lerp(a[1],b[1],t))+','+Math.round(lerp(a[2],b[2],t))+')'; }
+  function mod(n,m){ return ((n%m)+m)%m; }
+
+  // ============ TOUR EIFFEL MONUMENTALE ============
+  // Dessinée par rapport au sol, hauteur ~ 75% de l'écran
+  function drawEiffelMonument(cx, baseY, col){
+    const totalH = Math.min(baseY-10, H*0.78);
+    const top = baseY - totalH;
+    // proportions : 4 niveaux
+    const y1 = baseY - totalH*0.18;   // 1er étage
+    const y2 = baseY - totalH*0.46;   // 2e étage
+    const y3 = baseY - totalH*0.80;   // sommet structure
+    const wBase = totalH*0.34;        // demi-largeur au sol
+    const w1 = totalH*0.20;
+    const w2 = totalH*0.105;
+    const w3 = totalH*0.028;
+
+    function leg(sign){
+      ctx.beginPath();
+      ctx.moveTo(cx+sign*wBase, baseY);
+      ctx.quadraticCurveTo(cx+sign*w1*1.15, y1, cx+sign*w1, y1);
+      ctx.lineTo(cx+sign*w2, y2);
+      ctx.lineTo(cx+sign*w3, y3);
+      ctx.stroke();
+    }
+    ctx.strokeStyle = col; ctx.lineCap='round';
+    // montants extérieurs épais
+    ctx.lineWidth = Math.max(2, totalH*0.014); leg(1); leg(-1);
+    // montants intérieurs fins
+    ctx.lineWidth = Math.max(1, totalH*0.007);
+    ctx.beginPath();
+    ctx.moveTo(cx-wBase*0.55, baseY); ctx.quadraticCurveTo(cx-w1*0.5, y1, cx-w1*0.55, y1);
+    ctx.lineTo(cx-w2*0.55, y2); ctx.lineTo(cx-w3, y3); ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(cx+wBase*0.55, baseY); ctx.quadraticCurveTo(cx+w1*0.5, y1, cx+w1*0.55, y1);
+    ctx.lineTo(cx+w2*0.55, y2); ctx.lineTo(cx+w3, y3); ctx.stroke();
+
+    // grande arche basse
+    ctx.lineWidth = Math.max(2, totalH*0.011);
+    ctx.beginPath();
+    ctx.moveTo(cx-wBase*0.82, baseY - totalH*0.10);
+    ctx.quadraticCurveTo(cx, baseY - totalH*0.22, cx+wBase*0.82, baseY - totalH*0.10);
+    ctx.stroke();
+
+    // plateformes
+    ctx.lineWidth = Math.max(2, totalH*0.012);
+    ctx.beginPath(); ctx.moveTo(cx-w1*1.15, y1); ctx.lineTo(cx+w1*1.15, y1); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(cx-w2*1.2, y2); ctx.lineTo(cx+w2*1.2, y2); ctx.stroke();
+    // garde-corps plateformes
+    ctx.lineWidth = Math.max(1, totalH*0.005);
+    ctx.strokeRect(cx-w1*1.15, y1-totalH*0.02, w1*2.3, totalH*0.02);
+    ctx.strokeRect(cx-w2*1.2, y2-totalH*0.018, w2*2.4, totalH*0.018);
+
+    // treillis (croisillons) entre niveaux
+    ctx.lineWidth = Math.max(0.5, totalH*0.004); ctx.strokeStyle = col;
+    function lattice(yA,wA,yB,wB,n){
+      for(let i=0;i<n;i++){
+        const fA=i/n, fB=(i+1)/n;
+        const xA1=cx-wA+2*wA*fA, xA2=cx-wA+2*wA*fB;
+        const xB1=cx-wB+2*wB*fA, xB2=cx-wB+2*wB*fB;
+        ctx.beginPath(); ctx.moveTo(xA1, lerp(yA,yB,0)); ctx.lineTo(xB2, lerp(yA,yB,1)); ctx.stroke();
+        ctx.beginPath(); ctx.moveTo(xA2, lerp(yA,yB,0)); ctx.lineTo(xB1, lerp(yA,yB,1)); ctx.stroke();
+      }
+    }
+    lattice(y1,w1, y2,w2, 6);
+    lattice(y2,w2, y3,w3, 7);
+    // base sous le 1er étage (entre les pieds)
+    lattice(baseY,wBase*0.82, y1,w1, 4);
+
+    // sommet : cabine + antenne
+    ctx.fillStyle = col;
+    ctx.fillRect(cx-w3*1.6, y3-totalH*0.03, w3*3.2, totalH*0.03);
+    ctx.lineWidth = Math.max(1.5, totalH*0.008);
+    ctx.beginPath(); ctx.moveTo(cx, y3-totalH*0.03); ctx.lineTo(cx, top); ctx.stroke();
+    ctx.fillStyle = '#E24B4A'; ctx.beginPath(); ctx.arc(cx, top, Math.max(2,totalH*0.01), 0, Math.PI*2); ctx.fill();
+  }
+
+  // ============ PALACIO DE LOS LÓPEZ ============
+  // Façade néoclassique blanche, tour-dôme centrale, galeries à colonnes, ailes symétriques
+  function drawPalacio(cx, baseY, scale){
+    const wall = '#F2ECDD', wallSh = '#E2D9C4', roof = '#8FA0AE', dome='#6E8390', trim='#C9BDA0';
+    const H0 = 92*scale;          // hauteur corps principal
+    const bodyW = 150*scale;      // largeur corps central
+    const wingW = 58*scale;       // largeur d'une aile
+    const wingH = 64*scale;
+    const left = cx - bodyW/2;
+
+    // ---- ailes latérales (avancées, plus basses) ----
+    function wing(x){
+      ctx.fillStyle = wallSh; ctx.fillRect(x, baseY-wingH, wingW, wingH);
+      // toiture aile
+      ctx.fillStyle = roof; ctx.fillRect(x-2, baseY-wingH-6, wingW+4, 6);
+      // colonnade (galerie)
+      ctx.fillStyle = wall;
+      const cols=4, gap=wingW/cols;
+      for(let i=0;i<cols;i++){ ctx.fillRect(x+4+i*gap, baseY-wingH+10, gap*0.4, wingH-16); }
+      ctx.fillStyle='rgba(120,110,90,0.35)';
+      for(let i=0;i<cols;i++){ ctx.fillRect(x+4+i*gap+gap*0.4, baseY-wingH+10, gap*0.6, wingH-16); }
+    }
+    wing(left - wingW + 6);
+    wing(cx + bodyW/2 - 6);
+
+    // ---- corps central ----
+    ctx.fillStyle = wall; ctx.fillRect(left, baseY-H0, bodyW, H0);
+    // soubassement
+    ctx.fillStyle = wallSh; ctx.fillRect(left, baseY-16, bodyW, 16);
+    // entablement / corniche
+    ctx.fillStyle = trim; ctx.fillRect(left-3, baseY-H0, bodyW+6, 7);
+
+    // grande colonnade frontale (8 colonnes)
+    const ncol=8, span=bodyW-20, cgap=span/ncol;
+    for(let i=0;i<ncol;i++){
+      const colx = left+10+i*cgap;
+      ctx.fillStyle='#FFFFFF'; ctx.fillRect(colx, baseY-H0+10, cgap*0.5, H0-26);
+      ctx.fillStyle='rgba(120,110,90,0.30)'; ctx.fillRect(colx+cgap*0.5, baseY-H0+10, cgap*0.5, H0-26);
+      // chapiteaux + bases
+      ctx.fillStyle=trim; ctx.fillRect(colx-1, baseY-H0+8, cgap*0.55, 4); ctx.fillRect(colx-1, baseY-20, cgap*0.55, 4);
+    }
+    // arcades sombres entre colonnes (profondeur galerie)
+    ctx.fillStyle='rgba(70,75,90,0.25)';
+    for(let i=0;i<ncol-1;i++){ const ax=left+10+i*cgap+cgap*0.55; ctx.fillRect(ax, baseY-H0+22, cgap*0.45, H0-40); }
+
+    // ---- tour-dôme centrale ----
+    const tW = 52*scale, tH = 70*scale, tx = cx - tW/2, ty = baseY - H0 - tH;
+    ctx.fillStyle = wall; ctx.fillRect(tx, ty, tW, tH);
+    ctx.fillStyle = trim; ctx.fillRect(tx-3, ty, tW+6, 6);
+    ctx.fillStyle = wallSh; ctx.fillRect(tx, ty, tW, tH); // base teinte
+    ctx.fillStyle = wall; ctx.fillRect(tx+3, ty+4, tW-6, tH-8);
+    // fenêtres cintrées de la tour
+    ctx.fillStyle='rgba(70,75,90,0.45)';
+    for(let i=0;i<3;i++){ const wx=tx+8+i*((tW-16)/3); ctx.fillRect(wx, ty+12, (tW-16)/3*0.6, tH*0.4); }
+    // balustrade tour
+    ctx.fillStyle=trim; ctx.fillRect(tx-2, ty-5, tW+4, 5);
+    // tambour du dôme
+    const dW=tW*0.7, dx=cx-dW/2, dy=ty-14*scale;
+    ctx.fillStyle=wall; ctx.fillRect(dx, dy, dW, 14*scale);
+    // dôme
+    ctx.fillStyle=dome; ctx.beginPath(); ctx.moveTo(dx, dy); ctx.quadraticCurveTo(cx, dy-30*scale, dx+dW, dy); ctx.closePath(); ctx.fill();
+    // reflet dôme
+    ctx.fillStyle='rgba(255,255,255,0.25)'; ctx.beginPath(); ctx.ellipse(cx-dW*0.15, dy-12*scale, dW*0.12, 14*scale, 0,0,Math.PI*2); ctx.fill();
+    // lanternon + flèche + drapeau
+    ctx.fillStyle=dome; ctx.fillRect(cx-3*scale, dy-30*scale, 6*scale, 10*scale);
+    ctx.strokeStyle='#7A7A7A'; ctx.lineWidth=2*scale; ctx.beginPath(); ctx.moveTo(cx, dy-30*scale); ctx.lineTo(cx, dy-46*scale); ctx.stroke();
+    // mini drapeau paraguayen
+    ctx.fillStyle='#D52B1E'; ctx.fillRect(cx, dy-46*scale, 14*scale, 3*scale);
+    ctx.fillStyle='#FFFFFF'; ctx.fillRect(cx, dy-43*scale, 14*scale, 3*scale);
+    ctx.fillStyle='#0038A8'; ctx.fillRect(cx, dy-40*scale, 14*scale, 3*scale);
+
+    // perron / escalier central
+    ctx.fillStyle=wallSh;
+    for(let s=0;s<3;s++){ ctx.fillRect(cx-(34-s*6)*scale, baseY-(s+1)*4, (68-s*12)*scale, 4); }
+  }
+
+  // ---------- petits décors France ----------
+  function drawHaussmann(x, baseY, w, h){
+    ctx.fillStyle = '#CFC6B0'; ctx.fillRect(x, baseY-h, w, h);
+    ctx.fillStyle = '#B8AE96'; ctx.fillRect(x, baseY-16, w, 16);
+    ctx.fillStyle = '#5E636B';
+    ctx.beginPath(); ctx.moveTo(x-3, baseY-h); ctx.lineTo(x+w*0.16, baseY-h-16); ctx.lineTo(x+w*0.84, baseY-h-16); ctx.lineTo(x+w+3, baseY-h); ctx.closePath(); ctx.fill();
+    const cols = Math.max(2, Math.floor(w/18)), rows = Math.max(3, Math.floor(h/24));
+    const gw = w/cols, gh = (h-16)/rows;
+    for(let i=0;i<cols;i++) for(let j=0;j<rows;j++){
+      const fx = x+i*gw+gw*0.22, fy = baseY-h+7+j*gh, fw=gw*0.56, fh=gh*0.6;
+      ctx.fillStyle = 'rgba(70,80,100,0.6)'; ctx.fillRect(fx, fy, fw, fh);
+      ctx.strokeStyle='#9A9078'; ctx.lineWidth=1; ctx.strokeRect(fx,fy,fw,fh);
+      if(j>0){ ctx.strokeStyle='rgba(40,40,45,0.7)'; ctx.lineWidth=1.5; ctx.strokeRect(fx-1, fy+fh, fw+2, 4); }
+    }
+  }
+  function drawLamppost(x, baseY, scale){
+    ctx.strokeStyle='#2C3138'; ctx.lineWidth=3*scale; ctx.lineCap='round';
+    ctx.beginPath(); ctx.moveTo(x, baseY); ctx.lineTo(x, baseY-42*scale); ctx.stroke();
+    ctx.fillStyle='#2C3138'; ctx.beginPath(); ctx.arc(x, baseY-42*scale, 4*scale, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle='rgba(255,225,150,0.9)'; ctx.beginPath(); ctx.arc(x, baseY-42*scale, 2.5*scale, 0, Math.PI*2); ctx.fill();
+  }
+
+  // ---------- petits décors Paraguay ----------
+  function drawHill(x, baseY, w, h, col){
+    ctx.fillStyle = col; ctx.beginPath(); ctx.moveTo(x, baseY);
+    ctx.quadraticCurveTo(x+w/2, baseY-h, x+w, baseY); ctx.closePath(); ctx.fill();
+  }
+  function drawPalm(x, baseY, scale){
+    ctx.strokeStyle = '#8A5A2E'; ctx.lineWidth=6*scale; ctx.lineCap='round';
+    ctx.beginPath(); ctx.moveTo(x, baseY); ctx.quadraticCurveTo(x+8*scale, baseY-44*scale, x-3*scale, baseY-80*scale); ctx.stroke();
+    ctx.strokeStyle='rgba(0,0,0,0.15)'; ctx.lineWidth=1.5*scale;
+    for(let i=1;i<=4;i++){ const yy=baseY-i*16*scale; ctx.beginPath(); ctx.moveTo(x-4*scale+i, yy); ctx.lineTo(x+4*scale+i, yy); ctx.stroke(); }
+    const tx=x-3*scale, ty=baseY-80*scale;
+    const fronds=[[-2,'#2E8B57'],[-1,'#34A065'],[0,'#2E8B57'],[1,'#34A065'],[2,'#2E8B57'],[-0.5,'#247A4A'],[0.5,'#247A4A']];
+    for(const fr of fronds){ ctx.strokeStyle=fr[1]; ctx.lineWidth=4*scale;
+      ctx.beginPath(); ctx.moveTo(tx, ty); ctx.quadraticCurveTo(tx+fr[0]*18*scale, ty-16*scale, tx+fr[0]*34*scale, ty+10*scale); ctx.stroke(); }
+    ctx.fillStyle='#6B4423'; ctx.beginPath(); ctx.arc(tx-3*scale,ty+3*scale,3*scale,0,Math.PI*2); ctx.arc(tx+4*scale,ty+4*scale,3*scale,0,Math.PI*2); ctx.fill();
+  }
+  function drawBush(x, baseY, scale){
+    ctx.fillStyle='#3C8C4A'; ctx.beginPath();
+    ctx.arc(x,baseY,10*scale,0,Math.PI*2); ctx.arc(x+9*scale,baseY+2,8*scale,0,Math.PI*2); ctx.arc(x-9*scale,baseY+2,8*scale,0,Math.PI*2); ctx.fill();
+  }
+
+  function drawBackdrop(t){
+    const scrollSlow = dist*0.6;
+    const scrollMid = dist*1.1;
+    const scrollFar = dist*0.3;
+
+    if(t < 0.62){
+      const fade = 1 - Math.min(1, (t-0.05)/0.55);
+      ctx.globalAlpha = Math.max(0,fade);
+      // immeubles haussmanniens lointains (derrière la tour)
+      for(let i=0;i<7;i++){ const x = mod(i*120 - scrollSlow*0.5, W+260) - 130; drawHaussmann(x, GROUND, 86, 70+((i*43)%48)); }
+      // TOUR EIFFEL MONUMENTALE (défile lentement, très grande)
+      const ex = mod(W*0.45 - scrollFar, (W+420)) - 210 + W*0.0;
+      drawEiffelMonument(ex, GROUND, lerpCol([90,82,64],[120,110,86], 0.3));
+      // réverbères proches
+      for(let i=0;i<6;i++){ const x = mod(i*180 - scrollMid*0.7, W+360) - 60; drawLamppost(x, GROUND, 1.1); }
+      ctx.globalAlpha = 1;
+    }
+    if(t > 0.42){
+      const fade = Math.min(1, (t-0.42)/0.32);
+      ctx.globalAlpha = fade;
+      // collines
+      drawHill(mod(W*0.0 - scrollFar, W+500) - 250, GROUND, 320, 78, '#4E9A63');
+      drawHill(mod(W*0.5 - scrollFar, W+500) - 250, GROUND, 360, 104, '#3E7D4F');
+      // PALACIO DE LOS LÓPEZ (pièce maîtresse, défile au rythme médian-lent)
+      const px = mod(W*0.55 - scrollSlow*0.55, (W+520)) - 200;
+      drawPalacio(px, GROUND, 1.15);
+      // collines proches (devant le bas du palais pour l'ancrer)
+      drawHill(mod(W*0.25 - scrollSlow*0.4, W+450) - 225, GROUND, 300, 130, '#357044');
+      // palmiers + buissons proches
+      for(let i=0;i<5;i++){ const x = mod(i*155 - scrollMid, W+320) - 100; drawPalm(x, GROUND, 0.95 + (i%2)*0.25); drawBush(x+70, GROUND-2, 1.0); }
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  function draw(){
+    const t = Math.min(1, dist/GOAL);
+    const g = ctx.createLinearGradient(0,0,0,GROUND);
+    g.addColorStop(0, lerpCol([108,118,134],[42,116,190], t));
+    g.addColorStop(0.55, lerpCol([150,158,168],[120,180,225], t));
+    g.addColorStop(1, lerpCol([200,205,210],[255,210,150], t));
+    ctx.fillStyle = g; ctx.fillRect(0,0,W,GROUND);
+
+    if(t > 0.3){
+      const sx=W-62, sy=70, sr=30+18*t;
+      const rg = ctx.createRadialGradient(sx,sy,4,sx,sy,sr*2.4);
+      rg.addColorStop(0,'rgba(255,244,200,'+(0.5*t)+')'); rg.addColorStop(1,'rgba(255,244,200,0)');
+      ctx.fillStyle=rg; ctx.beginPath(); ctx.arc(sx,sy,sr*2.4,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle='rgba(255,238,175,'+(0.35+0.55*t)+')'; ctx.beginPath(); ctx.arc(sx,sy,sr,0,Math.PI*2); ctx.fill();
+    }
+
+    ctx.fillStyle = t<0.5 ? 'rgba(210,212,216,0.9)' : 'rgba(255,255,255,0.92)';
+    for(let cl of clouds){
+      ctx.beginPath(); ctx.arc(cl.x,cl.y,cl.r,0,Math.PI*2);
+      ctx.arc(cl.x+cl.r,cl.y+4,cl.r*0.8,0,Math.PI*2); ctx.arc(cl.x-cl.r,cl.y+4,cl.r*0.7,0,Math.PI*2); ctx.fill();
+    }
+
+    ctx.strokeStyle='rgba(40,40,50,0.5)'; ctx.lineWidth=2;
+    for(let b of birds){ const f=Math.sin(b.ph)*4;
+      ctx.beginPath(); ctx.moveTo(b.x-6,b.y); ctx.quadraticCurveTo(b.x-3,b.y-4-f,b.x,b.y); ctx.quadraticCurveTo(b.x+3,b.y-4-f,b.x+6,b.y); ctx.stroke(); }
+
+    drawBackdrop(t);
+
+    if(drops.length){
+      ctx.strokeStyle='rgba(180,195,215,0.5)'; ctx.lineWidth=1.5;
+      for(let d of drops){ ctx.beginPath(); ctx.moveTo(d.x,d.y); ctx.lineTo(d.x-2,d.y+8); ctx.stroke(); }
+    }
+
+    const groundTop = lerpCol([108,108,114],[120,158,55], t);
+    const groundBot = lerpCol([78,78,84],[150,95,55], t);
+    const gg = ctx.createLinearGradient(0,GROUND,0,H);
+    gg.addColorStop(0,groundTop); gg.addColorStop(1,groundBot);
+    ctx.fillStyle = gg; ctx.fillRect(0,GROUND,W,H-GROUND);
+    ctx.fillStyle = 'rgba(0,0,0,0.14)'; ctx.fillRect(0,GROUND,W,5);
+    const off = (dist*4) % 44;
+    if(t < 0.5){ ctx.strokeStyle='rgba(255,255,255,0.12)'; ctx.lineWidth=2;
+      for(let x=-off; x<W; x+=44){ ctx.beginPath(); ctx.moveTo(x,GROUND+6); ctx.lineTo(x,H); ctx.stroke(); } }
+    else { ctx.fillStyle='rgba(255,255,255,0.10)';
+      for(let x=-off; x<W; x+=44){ ctx.fillRect(x, GROUND+20, 24, 4); } }
+
+    for(let i=0;i<trail.length;i++){ const tr=trail[i]; ctx.globalAlpha=Math.max(0,tr.life/10)*0.25;
+      ctx.fillStyle='#2563EB'; ctx.beginPath(); ctx.arc(tr.x,tr.y,8*(i/trail.length),0,Math.PI*2); ctx.fill(); }
+    ctx.globalAlpha=1;
+
+    for(let cn of coins){
+      const yy = cn.y + Math.sin(cn.ph)*3;
+      ctx.fillStyle = cn.col; ctx.beginPath(); ctx.arc(cn.x,yy,cn.r,0,Math.PI*2); ctx.fill();
+      ctx.strokeStyle='rgba(255,255,255,0.9)'; ctx.lineWidth=2; ctx.beginPath(); ctx.arc(cn.x,yy,cn.r,0,Math.PI*2); ctx.stroke();
+      ctx.fillStyle='rgba(255,255,255,0.5)'; ctx.beginPath(); ctx.arc(cn.x-4,yy-4,3,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle = '#0B1220'; ctx.font='bold 13px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText(cn.label, cn.x, yy+1);
+    }
+
+    for(let o of obstacles){
+      ctx.fillStyle='rgba(0,0,0,0.15)'; ctx.beginPath(); ctx.ellipse(o.x+o.w/2, GROUND+2, o.w*0.55, 5, 0,0,Math.PI*2); ctx.fill();
+      ctx.fillStyle = o.col; roundRect(o.x,o.y,o.w,o.h,5); ctx.fill();
+      ctx.fillStyle='rgba(255,255,255,0.15)'; roundRect(o.x,o.y,o.w,o.h*0.4,5); ctx.fill();
+      ctx.fillStyle = 'rgba(255,255,255,0.95)'; ctx.font='bold 10px sans-serif'; ctx.textAlign='center'; ctx.textBaseline='middle'; ctx.fillText(o.label, o.x+o.w/2, o.y+o.h/2);
+    }
+
+    drawPlayer();
+
+    for(let p of particles){ ctx.globalAlpha = Math.max(0,p.life/24); ctx.fillStyle = p.c; ctx.fillRect(p.x-2,p.y-2,4,4); }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawPlayer(){
+    const px = player.x, py = player.y, w=player.w, h=player.h;
+    const legSwing = player.onGround ? Math.sin(player.runFrame)*6 : 4;
+    ctx.fillStyle='rgba(0,0,0,0.15)'; ctx.beginPath(); ctx.ellipse(px+w/2, GROUND+2, 16, 5, 0,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#2563EB'; roundRect(px+6, py+14, w-12, h-22, 4); ctx.fill();
+    ctx.fillStyle = '#F4C9A8'; ctx.beginPath(); ctx.arc(px+w/2, py+10, 9, 0, Math.PI*2); ctx.fill();
+    ctx.fillStyle='#5A3A22'; ctx.beginPath(); ctx.arc(px+w/2, py+7, 9, Math.PI, Math.PI*2); ctx.fill();
+    ctx.strokeStyle='#0B1220'; ctx.lineWidth=4; ctx.lineCap='round';
+    ctx.beginPath(); ctx.moveTo(px+w/2-3, py+h-8); ctx.lineTo(px+w/2-6, py+h+legSwing*0.5); ctx.stroke();
+    ctx.beginPath(); ctx.moveTo(px+w/2+3, py+h-8); ctx.lineTo(px+w/2+6, py+h-legSwing*0.5); ctx.stroke();
+    ctx.strokeStyle='#1d4ed8'; ctx.lineWidth=4;
+    ctx.beginPath(); ctx.moveTo(px+w/2, py+20); ctx.lineTo(px+w/2+8, py+26+legSwing*0.3); ctx.stroke();
+    ctx.fillStyle='#7A4A1E'; ctx.fillRect(px+w/2+6, py+24, 9, 7);
+    ctx.strokeStyle='#5A340E'; ctx.lineWidth=1; ctx.strokeRect(px+w/2+6, py+24, 9, 7);
+  }
+
+  function loop(ts){
+    if(!lastTime) lastTime = ts;
+    let dt = (ts - lastTime)/16.67; lastTime = ts;
+    if(dt > 3) dt = 3;
+    if(state === 'play'){ update(dt); }
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  function startGame(){
+    reset(); state='play';
+    document.getElementById('start').classList.remove('active');
+    document.getElementById('start').classList.add('hide');
+    document.getElementById('over').classList.add('hide');
+    document.getElementById('over').classList.remove('active');
+    document.getElementById('hud').classList.remove('hide');
+    document.getElementById('progwrap').classList.remove('hide');
+    document.getElementById('flag').classList.remove('hide');
+  }
+  function endGame(victory){
+    state='over';
+    document.getElementById('hud').classList.add('hide');
+    document.getElementById('progwrap').classList.add('hide');
+    document.getElementById('flag').classList.add('hide');
+    const ov = document.getElementById('over');
+    ov.classList.remove('hide'); ov.classList.add('active');
+    if(victory){
+      document.getElementById('overTitle').innerHTML = '🇵🇾 Bienvenue à Asunción !';
+      document.getElementById('overSub').textContent = "Vous avez semé le fisc et rejoint le Palacio de los López. Résidence fiscale débloquée.";
+    } else {
+      document.getElementById('overTitle').textContent = 'Contrôle fiscal !';
+      document.getElementById('overSub').textContent = "Le fisc vous a rattrapé. Au Paraguay, ça ne serait jamais arrivé.";
+    }
+    document.getElementById('finalScore').textContent = score.toLocaleString('fr-FR')+' €';
+    document.getElementById('finalDist').textContent = Math.floor(dist)+' m parcourus';
+  }
+
+  document.getElementById('playBtn').addEventListener('click', startGame);
+  document.getElementById('retryBtn').addEventListener('click', startGame);
+  document.getElementById('waBtn').addEventListener('click', ()=>{ window.open(WHATSAPP,'_blank'); });
+
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
